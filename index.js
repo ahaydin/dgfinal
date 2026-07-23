@@ -26,21 +26,32 @@ app.post('/api/odeme-baslat', async (req, res) => {
         // --- A) VAKIFBANK İŞLEMLERİ ---
         // --- A) VAKIFBANK İŞLEMLERİ ---
        // --- A) VAKIFBANK İŞLEMLERİ ---
+     // --- A) VAKIFBANK İŞLEMLERİ ---
         if (odemeTipi === 'vakifbank' || odemeTipi === 'kredi_karti') {
             
             const basariliUrl = "http://localhost:5005/api/odeme-sonuc/basarili";
             const basarisizUrl = "http://localhost:5005/api/odeme-sonuc/basarisiz";
-
-            // 1. BANKANIN MAİLDE İSTEDİĞİ YENİ JSON ADRESİ
             const YENI_POS_URL = "https://inbound.apigateway.vakifbank.com.tr:8443/threeDGateway/ProcessEnrollment";
 
-            // 2. Verileri karmaşık formlara çevirmeden, saf JSON objesi olarak hazırlıyoruz
+            // 🎯 ÇÖZÜM: TARIH FORMATINI HAVADA ÇEVİRME (AAYY -> YYAA)
+            let temizTarih = sonKullanma.replace(/[^0-9]/g, ''); // Sadece rakamları al (Örn: 12/25 -> 1225)
+            let vakifTarihFormatli = sonKullanma; 
+            
+            if (temizTarih.length === 4) {
+                // 1225 geldiyse -> 2512 yap
+                vakifTarihFormatli = temizTarih.substring(2, 4) + temizTarih.substring(0, 2);
+            } else if (temizTarih.length === 6) {
+                // 122025 geldiyse -> 2512 yap
+                vakifTarihFormatli = temizTarih.substring(4, 6) + temizTarih.substring(0, 2);
+            }
+
+            // 2. Saf JSON objesi olarak hazırlıyoruz
             const payload = {
                 MerchantId: MERCHANT_ID,
-                MerchantPassword: "Ep6o1RKs", // DİKKAT: Buraya gerçek panel şifreni yaz!
+                MerchantPassword: "Ep6o1RKs", // Bankanın verdiği o doğru şifre
                 TerminalNo: TERMINAL_ID,
                 Pan: kartNo,
-                ExpiryDate: sonKullanma, // YYMM formatı
+                ExpiryDate: vakifTarihFormatli, // YENİ: Takla attırılmış doğru tarih formatı
                 PurchaseAmount: tutar,
                 Currency: "949",
                 BrandName: "100",
@@ -50,7 +61,6 @@ app.post('/api/odeme-baslat', async (req, res) => {
             };
 
             try {
-                // 3. İsteği doğrudan JSON formatında atıyoruz
                 const vakifResponse = await axios.post(YENI_POS_URL, payload, {
                     headers: { 
                         'Content-Type': 'application/json',
@@ -60,16 +70,12 @@ app.post('/api/odeme-baslat', async (req, res) => {
 
                 console.log("✅ Bankadan Gelen JSON Yanıtı:", vakifResponse.data);
 
-                // 4. JSON yanıtı içinden PaReq verisini alıyoruz
-                // (Banka baş harfini büyük veya küçük gönderebilir diye 3 ihtimali de yazdım)
                 const paReq = vakifResponse.data.PaReq || vakifResponse.data.paReq || vakifResponse.data.PAREQ;
 
                 if (paReq) {
-                    // Şifreyi çözüp React'e o SMS ekranını HTML olarak yolluyoruz
                     const smsEkraniHtml = Buffer.from(paReq, 'base64').toString('utf-8');
                     return res.json({ basarili: true, html: smsEkraniHtml });
                 } else {
-                    // Eğer reddedilirse tam olarak neye kızdığını terminale basıyoruz
                     console.error("Vakıfbank Red Sebebi:", vakifResponse.data); 
                     return res.json({ basarili: false, hata: "Banka işlemi onaylamadı. Lütfen geçerli bir kart girin." });
                 }
