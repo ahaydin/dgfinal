@@ -23,10 +23,14 @@ app.post('/api/odeme-baslat', async (req, res) => {
 
         // --- A) VAKIFBANK İŞLEMLERİ ---
        // --- A) VAKIFBANK İŞLEMLERİ ---
+      // --- A) VAKIFBANK İŞLEMLERİ ---
         if (odemeTipi === 'vakifbank' || odemeTipi === 'kredi_karti') {
             
-            // 1. GÜVENLİK DUVARINI AŞAN ESKİ HTTP ADRESİMİZ
+            // 1. MAİLDEKİ "3D Secure HTTP" ADRESİ
             const POS_URL = "https://inbound.apigateway.vakifbank.com.tr:8443/threeDGateway/Enrollment";
+
+            const basariliUrl = "http://localhost:5005/api/odeme-sonuc/basarili";
+            const basarisizUrl = "http://localhost:5005/api/odeme-sonuc/basarisiz";
 
             // 🎯 GÜVENLİ TARIH ÇEVİRİCİ (AAYY -> YYAA)
             let guvenliTarih = sonKullanma || "";
@@ -39,50 +43,40 @@ app.post('/api/odeme-baslat', async (req, res) => {
                 vakifTarihFormatli = temizTarih.substring(4, 6) + temizTarih.substring(0, 2);
             }
 
-            // 🎯 TUTAR ÇEVİRİCİ (Banka noktayı sevmez, kuruş ister. Örn: 10.50 -> 1050)
+            // 🎯 TUTAR ÇEVİRİCİ (10.50 -> 1050)
             let kurusTutar = Math.round(Number(tutar) * 100).toString();
 
-            // 2. ÇALIŞAN EFSANE XML FORMATIMIZ
-            const xmlIstek = `
-            <VerifyEnrollmentRequest>
-                <MerchantId>${MERCHANT_ID}</MerchantId>
-                <Password>Ep6o1RKs</Password>
-                <TerminalNo>${TERMINAL_ID}</TerminalNo>
-                <Pan>${kartNo}</Pan>
-                <Expiry>${vakifTarihFormatli}</Expiry>
-                <PurchaseAmount>${kurusTutar}</PurchaseAmount>
-                <Currency>949</Currency>
-                <BrandName>100</BrandName>
-                <VerifyEnrollmentRequestId>${siparisNo}</VerifyEnrollmentRequestId>
-            </VerifyEnrollmentRequest>`;
+            // 🚀 ÇALIŞAN ASIL SİSTEM: TARAYICIDAN GİZLİ POST (WAF'I AŞAR)
+            const htmlForm = `
+            <!DOCTYPE html>
+            <html>
+            <head><title>Vakıfbank 3D Yönlendirme</title></head>
+            <body onload="document.forms[0].submit();">
+                <div style="text-align:center; font-family:sans-serif; margin-top: 50px;">
+                    <h3>Vakıfbank 3D Secure sayfasına yönlendiriliyorsunuz...</h3>
+                    <p>Lütfen bekleyin...</p>
+                </div>
+                <!-- Bu form tarayıcı tarafından otomatik olarak Vakıfbank'a gönderilecek -->
+                <form action="${POS_URL}" method="POST" style="display:none;">
+                    <input type="hidden" name="MerchantId" value="${MERCHANT_ID}" />
+                    <input type="hidden" name="MerchantPassword" value="Ep6o1RKs" />
+                    <input type="hidden" name="TerminalNo" value="${TERMINAL_ID}" />
+                    <input type="hidden" name="Pan" value="${kartNo}" />
+                    <input type="hidden" name="ExpiryDate" value="${vakifTarihFormatli}" />
+                    <input type="hidden" name="PurchaseAmount" value="${kurusTutar}" />
+                    <input type="hidden" name="Currency" value="949" />
+                    <input type="hidden" name="BrandName" value="100" />
+                    <input type="hidden" name="VerifyEnrollmentRequestId" value="${siparisNo}" />
+                    <input type="hidden" name="SuccessUrl" value="${basariliUrl}" />
+                    <input type="hidden" name="FailureUrl" value="${basarisizUrl}" />
+                </form>
+            </body>
+            </html>
+            `;
 
-            try {
-                // 3. User-Agent (Tarayıcı Kimliği) ile güvenlik duvarından geçiyoruz
-                const vakifResponse = await axios.post(POS_URL, xmlIstek, {
-                    headers: { 
-                        'Content-Type': 'application/xml',
-                        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
-                    }
-                });
-
-                const xmlVerisi = vakifResponse.data;
-                console.log("✅ Bankadan Gelen XML Yanıtı:", xmlVerisi);
-
-                // 4. SMS Şifre ekranını (PaReq) XML'in içinden söküp alıyoruz
-                const paReqEslenme = xmlVerisi.match(/<PaReq>(.*?)<\/PaReq>/);
-
-                if (paReqEslenme && paReqEslenme[1]) {
-                    const sifreliPaReq = paReqEslenme[1];
-                    const smsEkraniHtml = Buffer.from(sifreliPaReq, 'base64').toString('utf-8');
-                    return res.json({ basarili: true, html: smsEkraniHtml });
-                } else {
-                    console.error("Vakıfbank Red Yanıtı:", xmlVerisi); 
-                    return res.json({ basarili: false, hata: "Bankadan onay SMS ekranı alınamadı. Lütfen geçerli bir kredi kartı girin." });
-                }
-            } catch (err) {
-                console.error("Sunucu İstek Hatası:", err.response ? err.response.data : err.message);
-                return res.json({ basarili: false, hata: "Bankaya ulaşılamadı. Terminal loglarına bakın." });
-            }
+            // Node.js bankaya bağlanmaya ÇALIŞMAZ, HTML'i React'e yollar.
+            // React bunu ekrana basar, işlem senin güvenli tarayıcından çıkar!
+            return res.json({ basarili: true, html: htmlForm });
         }
         // --- B) METROPOL İŞLEMLERİ ---
         else if (odemeTipi === 'metropol') {
