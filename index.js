@@ -22,13 +22,13 @@ app.post('/api/odeme-baslat', async (req, res) => {
         const { siparisNo, tutar, kartNo, sonKullanma, cvv, odemeTipi, telefon } = req.body;
 
         // --- A) VAKIFBANK İŞLEMLERİ ---
+       // --- A) VAKIFBANK İŞLEMLERİ ---
         if (odemeTipi === 'vakifbank' || odemeTipi === 'kredi_karti') {
             
-            const basariliUrl = "http://localhost:5005/api/odeme-sonuc/basarili";
-            const basarisizUrl = "http://localhost:5005/api/odeme-sonuc/basarisiz";
-            const YENI_POS_URL = "https://inbound.apigateway.vakifbank.com.tr:8443/threeDGateway/ProcessEnrollment";
+            // 1. GÜVENLİK DUVARINI AŞAN ESKİ HTTP ADRESİMİZ
+            const POS_URL = "https://inbound.apigateway.vakifbank.com.tr:8443/threeDGateway/Enrollment";
 
-            // 🎯 GÜVENLİ TARIH ÇEVİRİCİ (Boş gelme ihtimaline karşı çökme korumalı)
+            // 🎯 GÜVENLİ TARIH ÇEVİRİCİ (AAYY -> YYAA)
             let guvenliTarih = sonKullanma || "";
             let temizTarih = guvenliTarih.replace(/[^0-9]/g, ''); 
             let vakifTarihFormatli = guvenliTarih; 
@@ -39,45 +39,51 @@ app.post('/api/odeme-baslat', async (req, res) => {
                 vakifTarihFormatli = temizTarih.substring(4, 6) + temizTarih.substring(0, 2);
             }
 
-            const payload = {
-                MerchantId: MERCHANT_ID,
-                MerchantPassword: "Ep6o1RKs", 
-                TerminalNo: TERMINAL_ID,
-                Pan: kartNo,
-                ExpiryDate: vakifTarihFormatli, 
-                PurchaseAmount: tutar,
-                Currency: "949",
-                BrandName: "100",
-                VerifyEnrollmentRequestId: siparisNo,
-                SuccessUrl: basariliUrl,
-                FailureUrl: basarisizUrl
-            };
+            // 🎯 TUTAR ÇEVİRİCİ (Banka noktayı sevmez, kuruş ister. Örn: 10.50 -> 1050)
+            let kurusTutar = Math.round(Number(tutar) * 100).toString();
+
+            // 2. ÇALIŞAN EFSANE XML FORMATIMIZ
+            const xmlIstek = `
+            <VerifyEnrollmentRequest>
+                <MerchantId>${MERCHANT_ID}</MerchantId>
+                <Password>Ep6o1RKs</Password>
+                <TerminalNo>${TERMINAL_ID}</TerminalNo>
+                <Pan>${kartNo}</Pan>
+                <Expiry>${vakifTarihFormatli}</Expiry>
+                <PurchaseAmount>${kurusTutar}</PurchaseAmount>
+                <Currency>949</Currency>
+                <BrandName>100</BrandName>
+                <VerifyEnrollmentRequestId>${siparisNo}</VerifyEnrollmentRequestId>
+            </VerifyEnrollmentRequest>`;
 
             try {
-                const vakifResponse = await axios.post(YENI_POS_URL, payload, {
+                // 3. User-Agent (Tarayıcı Kimliği) ile güvenlik duvarından geçiyoruz
+                const vakifResponse = await axios.post(POS_URL, xmlIstek, {
                     headers: { 
-                        'Content-Type': 'application/json',
-                        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+                        'Content-Type': 'application/xml',
+                        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
                     }
                 });
 
-                console.log("✅ Bankadan Gelen JSON Yanıtı:", vakifResponse.data);
+                const xmlVerisi = vakifResponse.data;
+                console.log("✅ Bankadan Gelen XML Yanıtı:", xmlVerisi);
 
-                const paReq = vakifResponse.data.PaReq || vakifResponse.data.paReq || vakifResponse.data.PAREQ;
+                // 4. SMS Şifre ekranını (PaReq) XML'in içinden söküp alıyoruz
+                const paReqEslenme = xmlVerisi.match(/<PaReq>(.*?)<\/PaReq>/);
 
-                if (paReq) {
-                    const smsEkraniHtml = Buffer.from(paReq, 'base64').toString('utf-8');
+                if (paReqEslenme && paReqEslenme[1]) {
+                    const sifreliPaReq = paReqEslenme[1];
+                    const smsEkraniHtml = Buffer.from(sifreliPaReq, 'base64').toString('utf-8');
                     return res.json({ basarili: true, html: smsEkraniHtml });
                 } else {
-                    console.error("Vakıfbank Red Sebebi:", vakifResponse.data); 
-                    return res.json({ basarili: false, hata: "Banka işlemi onaylamadı. Lütfen geçerli bir kart girin." });
+                    console.error("Vakıfbank Red Yanıtı:", xmlVerisi); 
+                    return res.json({ basarili: false, hata: "Bankadan onay SMS ekranı alınamadı. Lütfen geçerli bir kredi kartı girin." });
                 }
             } catch (err) {
                 console.error("Sunucu İstek Hatası:", err.response ? err.response.data : err.message);
                 return res.json({ basarili: false, hata: "Bankaya ulaşılamadı. Terminal loglarına bakın." });
             }
         }
-        
         // --- B) METROPOL İŞLEMLERİ ---
         else if (odemeTipi === 'metropol') {
             const M_ACCESS_KEY = "4E602A99-50F1-4FAD-96A2-8BD6EA6CD370";
