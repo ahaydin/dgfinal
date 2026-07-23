@@ -27,7 +27,7 @@ app.post('/api/odeme-baslat', async (req, res) => {
         if (odemeTipi === 'vakifbank' || odemeTipi === 'kredi_karti') {
             
             // 1. MAİLDEKİ "3D Secure HTTP" ADRESİ
-            const POS_URL = "https://inbound.apigateway.vakifbank.com.tr:8443/threeDGateway/Enrollment";
+            const POS_URL = "https://apigw.vakifbank.com.tr:8443/virtualPos/TransactionServices.asmx";
 
             const basariliUrl = "http://localhost:5005/api/odeme-sonuc/basarili";
             const basarisizUrl = "http://localhost:5005/api/odeme-sonuc/basarisiz";
