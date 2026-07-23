@@ -24,11 +24,10 @@ app.post('/api/odeme-baslat', async (req, res) => {
         // --- A) VAKIFBANK İŞLEMLERİ ---
        // --- A) VAKIFBANK İŞLEMLERİ ---
       // --- A) VAKIFBANK İŞLEMLERİ ---
+       // --- A) VAKIFBANK İŞLEMLERİ ---
         if (odemeTipi === 'vakifbank' || odemeTipi === 'kredi_karti') {
             
-            // 1. MAİLDEKİ "3D Secure HTTP" ADRESİ
-            const POS_URL = "https://apigw.vakifbank.com.tr:8443/virtualPos/TransactionServices.asmx";
-
+            const POS_URL = "https://inbound.apigateway.vakifbank.com.tr:8443/threeDGateway/Enrollment";
             const basariliUrl = "http://localhost:5005/api/odeme-sonuc/basarili";
             const basarisizUrl = "http://localhost:5005/api/odeme-sonuc/basarisiz";
 
@@ -46,37 +45,47 @@ app.post('/api/odeme-baslat', async (req, res) => {
             // 🎯 TUTAR ÇEVİRİCİ (10.50 -> 1050)
             let kurusTutar = Math.round(Number(tutar) * 100).toString();
 
-            // 🚀 ÇALIŞAN ASIL SİSTEM: TARAYICIDAN GİZLİ POST (WAF'I AŞAR)
-            const htmlForm = `
-            <!DOCTYPE html>
-            <html>
-            <head><title>Vakıfbank 3D Yönlendirme</title></head>
-            <body onload="document.forms[0].submit();">
-                <div style="text-align:center; font-family:sans-serif; margin-top: 50px;">
-                    <h3>Vakıfbank 3D Secure sayfasına yönlendiriliyorsunuz...</h3>
-                    <p>Lütfen bekleyin...</p>
-                </div>
-                <!-- Bu form tarayıcı tarafından otomatik olarak Vakıfbank'a gönderilecek -->
-                <form action="${POS_URL}" method="POST" style="display:none;">
-                    <input type="hidden" name="MerchantId" value="${MERCHANT_ID}" />
-                    <input type="hidden" name="MerchantPassword" value="Ep6o1RKs" />
-                    <input type="hidden" name="TerminalNo" value="${TERMINAL_ID}" />
-                    <input type="hidden" name="Pan" value="${kartNo}" />
-                    <input type="hidden" name="ExpiryDate" value="${vakifTarihFormatli}" />
-                    <input type="hidden" name="PurchaseAmount" value="${kurusTutar}" />
-                    <input type="hidden" name="Currency" value="949" />
-                    <input type="hidden" name="BrandName" value="100" />
-                    <input type="hidden" name="VerifyEnrollmentRequestId" value="${siparisNo}" />
-                    <input type="hidden" name="SuccessUrl" value="${basariliUrl}" />
-                    <input type="hidden" name="FailureUrl" value="${basarisizUrl}" />
-                </form>
-            </body>
-            </html>
-            `;
+            // 🚀 ÇALIŞAN EFSANE: URLSearchParams ile Form Gönderimi
+            const formData = new URLSearchParams();
+            formData.append('MerchantId', MERCHANT_ID);
+            formData.append('MerchantPassword', 'Ep6o1RKs'); 
+            formData.append('TerminalNo', TERMINAL_ID);
+            formData.append('Pan', kartNo);
+            formData.append('ExpiryDate', vakifTarihFormatli);
+            formData.append('PurchaseAmount', kurusTutar);
+            formData.append('Currency', '949');
+            formData.append('BrandName', '100');
+            formData.append('VerifyEnrollmentRequestId', siparisNo);
+            formData.append('SuccessUrl', basariliUrl);
+            formData.append('FailureUrl', basarisizUrl);
 
-            // Node.js bankaya bağlanmaya ÇALIŞMAZ, HTML'i React'e yollar.
-            // React bunu ekrana basar, işlem senin güvenli tarayıcından çıkar!
-            return res.json({ basarili: true, html: htmlForm });
+            try {
+                // application/x-www-form-urlencoded ile WAF'ı aşıyoruz
+                const vakifResponse = await axios.post(POS_URL, formData.toString(), {
+                    headers: { 
+                        'Content-Type': 'application/x-www-form-urlencoded',
+                        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+                    }
+                });
+
+                const xmlVerisi = vakifResponse.data;
+                console.log("✅ Bankadan Gelen XML Yanıtı:", xmlVerisi);
+
+                // Base64 şifreli SMS ekranı kodunu çekiyoruz
+                const paReqEslenme = xmlVerisi.match(/<PaReq>(.*?)<\/PaReq>/i);
+
+                if (paReqEslenme && paReqEslenme[1]) {
+                    const sifreliPaReq = paReqEslenme[1];
+                    const smsEkraniHtml = Buffer.from(sifreliPaReq, 'base64').toString('utf-8');
+                    return res.json({ basarili: true, html: smsEkraniHtml });
+                } else {
+                    console.error("Vakıfbank Red Yanıtı:", xmlVerisi); 
+                    return res.json({ basarili: false, hata: "Bankadan onay SMS ekranı alınamadı. Lütfen geçerli bir kredi kartı girin." });
+                }
+            } catch (err) {
+                console.error("Sunucu İstek Hatası:", err.response ? err.response.data : err.message);
+                return res.json({ basarili: false, hata: "Bankaya ulaşılamadı. Terminal loglarına bakın." });
+            }
         }
         // --- B) METROPOL İŞLEMLERİ ---
         else if (odemeTipi === 'metropol') {
