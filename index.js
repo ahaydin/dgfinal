@@ -9,12 +9,10 @@ app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
 // =========================================================
-// ⚠️ VAKIFBANK GİZLİ BİLGİLERİ (CANLI ORTAM)
+// ⚠️ VAKIFBANK GİZLİ BİLGİLERİ
 // =========================================================
 const MERCHANT_ID = "000000056817349"; 
-const STORE_KEY = "Ep6o1RKs"; 
 const TERMINAL_ID = "V3805394"; 
-const POS_URL = "https://inbound.apigateway.vakifbank.com.tr:8443/threeDGateway/Enrollment";
 
 // ---------------------------------------------------------
 // 1. ADIM: ÖDEME BAŞLATMA SANTRALİ (MAKAS)
@@ -24,34 +22,29 @@ app.post('/api/odeme-baslat', async (req, res) => {
         const { siparisNo, tutar, kartNo, sonKullanma, cvv, odemeTipi, telefon } = req.body;
 
         // --- A) VAKIFBANK İŞLEMLERİ ---
-        // --- A) VAKIFBANK İŞLEMLERİ ---
-       // --- A) VAKIFBANK İŞLEMLERİ ---
-     // --- A) VAKIFBANK İŞLEMLERİ ---
         if (odemeTipi === 'vakifbank' || odemeTipi === 'kredi_karti') {
             
             const basariliUrl = "http://localhost:5005/api/odeme-sonuc/basarili";
             const basarisizUrl = "http://localhost:5005/api/odeme-sonuc/basarisiz";
             const YENI_POS_URL = "https://inbound.apigateway.vakifbank.com.tr:8443/threeDGateway/ProcessEnrollment";
 
-            // 🎯 ÇÖZÜM: TARIH FORMATINI HAVADA ÇEVİRME (AAYY -> YYAA)
-            let temizTarih = sonKullanma.replace(/[^0-9]/g, ''); // Sadece rakamları al (Örn: 12/25 -> 1225)
-            let vakifTarihFormatli = sonKullanma; 
+            // 🎯 GÜVENLİ TARIH ÇEVİRİCİ (Boş gelme ihtimaline karşı çökme korumalı)
+            let guvenliTarih = sonKullanma || "";
+            let temizTarih = guvenliTarih.replace(/[^0-9]/g, ''); 
+            let vakifTarihFormatli = guvenliTarih; 
             
             if (temizTarih.length === 4) {
-                // 1225 geldiyse -> 2512 yap
                 vakifTarihFormatli = temizTarih.substring(2, 4) + temizTarih.substring(0, 2);
             } else if (temizTarih.length === 6) {
-                // 122025 geldiyse -> 2512 yap
                 vakifTarihFormatli = temizTarih.substring(4, 6) + temizTarih.substring(0, 2);
             }
 
-            // 2. Saf JSON objesi olarak hazırlıyoruz
             const payload = {
                 MerchantId: MERCHANT_ID,
-                MerchantPassword: "Ep6o1RKs", // Bankanın verdiği o doğru şifre
+                MerchantPassword: "Ep6o1RKs", 
                 TerminalNo: TERMINAL_ID,
                 Pan: kartNo,
-                ExpiryDate: vakifTarihFormatli, // YENİ: Takla attırılmış doğru tarih formatı
+                ExpiryDate: vakifTarihFormatli, 
                 PurchaseAmount: tutar,
                 Currency: "949",
                 BrandName: "100",
@@ -84,6 +77,7 @@ app.post('/api/odeme-baslat', async (req, res) => {
                 return res.json({ basarili: false, hata: "Bankaya ulaşılamadı. Terminal loglarına bakın." });
             }
         }
+        
         // --- B) METROPOL İŞLEMLERİ ---
         else if (odemeTipi === 'metropol') {
             const M_ACCESS_KEY = "4E602A99-50F1-4FAD-96A2-8BD6EA6CD370";
@@ -154,7 +148,6 @@ app.post('/api/odeme-baslat', async (req, res) => {
 app.post('/api/metropol-onay', async (req, res) => {
     try {
         const { otpKodu, otpRefCode, metropolToken, siparisNo, tutar, kartNo } = req.body;
-
         const M_MERCHANT_NO = "0000052983";
         const M_TERMINAL_NO = "0000064998";
 
@@ -202,7 +195,6 @@ app.post('/api/odeme-sonuc/basarisiz', (req, res) => {
     res.send("<h1>ÖDEME BAŞARISIZ OLDU.</h1>");
 });
 
-// SUNUCU PORTU 5005
 const PORT = 5005;
 app.listen(PORT, () => {
     console.log(`🚀 POS Arka Plan Sunucusu (Backend) ${PORT} portunda çalışıyor!`);
